@@ -1,39 +1,72 @@
+import 'dotenv/config';
 import express from 'express';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import { createProxyMiddleware } from 'http-proxy-middleware';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import cors from 'cors';
+import HandbookScraper from './handbookScraper.js';
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+app.use(cors());
+app.use(express.json());
 
-// Serve the main landing page
-app.use(express.static(path.join(__dirname, '../public_html')));
+let lastScrapeTime = null;
+let isScrapingInProgress = false;
 
-// Serve the React app under /chatbot path
-app.use('/chatbot', express.static(path.join(__dirname, '../dist')));
+app.post('/api/scrape', async (req, res) => {
+    if (isScrapingInProgress) {
+        return res.status(409).json({ 
+            error: 'Scraping already in progress',
+            lastScrapeTime
+        });
+    }
 
-// Proxy setup for the backend server (from proxy.js)
-app.use('/api', createProxyMiddleware({
-    target: 'http://localhost:3001',
-    changeOrigin: true,
-}));
+    try {
+        isScrapingInProgress = true;
+        const scraper = new HandbookScraper({
+            maxConcurrent: parseInt(process.env.MAX_CONCURRENT_REQUESTS) || 2,
+            minDelay: parseInt(process.env.MIN_REQUEST_DELAY) || 2000,
+            maxDelay: parseInt(process.env.MAX_REQUEST_DELAY) || 5000,
+            maxRetries: parseInt(process.env.MAX_RETRIES) || 3,
+            maxDepth: parseInt(process.env.MAX_DEPTH) || 2
+        });
 
-// Handle React app routes
-app.get('/chatbot/*', (req, res) => {
-    res.sendFile(path.join(__dirname, '../dist/index.html'));
+        console.log('Starting handbook scraping...');
+        await scraper.start();
+        lastScrapeTime = new Date().toISOString();
+        console.log('Handbook scraping completed successfully');
+        
+        res.json({ 
+            success: true,
+            lastScrapeTime 
+        });
+    } catch (error) {
+        console.error('Error during scraping:', error);
+        res.status(500).json({ 
+            error: 'Scraping failed',
+            message: error.message
+        });
+    } finally {
+        isScrapingInProgress = false;
+    }
 });
 
-// Handle 404s
-app.use((req, res) => {
-    res.status(404).sendFile(path.join(__dirname, '../public_html/index.html'));
+app.get('/api/scrape/status', (req, res) => {
+    res.json({
+        isScrapingInProgress,
+        lastScrapeTime
+    });
 });
 
-//app.listen(PORT, () => {
-//    console.log(`Server running on port ${PORT}`);
-//});
-app.listen(PORT, '0.0.0.0', () => {
+// Handle process termination
+process.on('SIGINT', () => {
+    console.log('Received SIGINT. Cleaning up...');
+    process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+    console.log('Received SIGTERM. Cleaning up...');
+    process.exit(0);
+});
+
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
 });
