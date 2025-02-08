@@ -1,0 +1,80 @@
+// Update the processContent function
+const processContent = (html) => {
+  const $ = cheerio.load(html);
+  
+  // Get content from multiple relevant sections
+  const mainContent = $('main').text() || '';
+  const articleContent = $('article').text() || '';
+  const contentSection = $('.content, .content-section, #content').text() || '';
+  
+  // Combine all content sources
+  let combinedContent = [mainContent, articleContent, contentSection]
+    .filter(content => content.length > 0)
+    .join('\n');
+
+  // If no content found through specific selectors, get body content
+  if (!combinedContent) {
+    combinedContent = $('body').text();
+  }
+
+  // Clean and format content
+  return combinedContent
+    .replace(/\s+/g, ' ') // Normalize whitespace
+    .replace(/(\d+\.(?:\d+\.)*\d*)/g, '\n$1') // Format section numbers
+    .replace(/([a-z])([A-Z])/g, '$1 $2') // Add space between camelCase
+    .replace(/([.!?])\s+/g, '$1\n') // Add newlines after sentences
+    .replace(/\n\s+/g, '\n') // Remove extra whitespace after newlines
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line.length > 0)
+    .join('\n')
+    .trim();
+};
+
+// Update the travel-instructions endpoint to log content length
+app.get('/api/travel-instructions', async (req, res) => {
+  try {
+    // Check cache
+    const cachedData = cache.get('travel-instructions');
+    if (cachedData && (Date.now() - cachedData.timestamp < CACHE_TTL)) {
+      console.log('Serving cached content, length:', cachedData.content.length);
+      return res.json({ content: cachedData.content, cached: true });
+    }
+
+    console.log('Fetching fresh content...');
+    const response = await axios.get(
+      'https://www.canada.ca/en/department-national-defence/services/benefits-military/pay-pension-benefits/benefits/canadian-forces-temporary-duty-travel-instructions.html',
+      {
+        headers: {
+          'Accept-Encoding': 'gzip, deflate, br',
+          'User-Agent': 'Mozilla/5.0 (compatible; TravelInstructionsBot/1.0)',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Cache-Control': 'no-cache'
+        },
+        timeout: REQUEST_TIMEOUT
+      }
+    );
+
+    const content = processContent(response.data);
+    console.log('Processed content length:', content.length);
+    console.log('First 500 characters:', content.substring(0, 500));
+
+    // Update cache
+    cache.set('travel-instructions', {
+      content,
+      timestamp: Date.now(),
+      lastModified: response.headers['last-modified'],
+      etag: response.headers.etag
+    });
+
+    res.json({ content, fresh: true });
+  } catch (error) {
+    console.error('Error fetching content:', error);
+    // Fall back to default content if available
+    const defaultContent = defaultTravelInstructions;
+    res.json({ 
+      content: defaultContent,
+      error: 'Using default content due to fetch error'
+    });
+  }
+});
