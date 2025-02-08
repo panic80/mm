@@ -1,38 +1,28 @@
-import { fetchTravelInstructions } from './travelInstructions';
-
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 
 export const sendToGemini = async (
   message,
   isSimplified = false,
   model = 'gemini-pro',
-  preloadedInstructions = null
+  signal = null
 ) => {
   try {
-    // Ensure we have travel instructions
-    if (!preloadedInstructions) {
-      throw new Error('Travel instructions not loaded');
-    }
-
     // Prepare request body
     const requestBody = {
       contents: [{
         role: "user",
         parts: [{
-          text: `You are a helpful assistant for Canadian Forces Travel Instructions.
-Here is the ONLY source material you can reference:
-${preloadedInstructions}
+          text: `You are a helpful assistant for Canadian Forces Handbook.
 
 Question: ${message}
 
-
 Please provide a response in this EXACT format:
 
-Reference: <provide the section or chapter reference from the source>
+Reference: <provide the section or chapter reference>
 Quote: <provide the exact quote that contains the answer>
 ${isSimplified ?
   'Answer: <provide a concise answer in no more than two sentences>' :
-  'Answer: <provide a succinct one-sentence reply>\nReason: <provide a comprehensive explanation and justification drawing upon the source material>'}`
+  'Answer: <provide a succinct one-sentence reply>\nReason: <provide a comprehensive explanation and justification>'}`
         }]
       }],
       generationConfig: {
@@ -51,7 +41,8 @@ ${isSimplified ?
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(requestBody)
+        body: JSON.stringify(requestBody),
+        signal
       }
     );
 

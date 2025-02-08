@@ -1,9 +1,9 @@
-import React, { useState, useEffect, lazy, Suspense, startTransition } from 'react';
+import React, { useState, useEffect, lazy, Suspense, startTransition, useRef } from 'react';
 import { BrowserRouter as Router, Routes, Route, useNavigate } from 'react-router-dom';
 import { sendToGemini } from './api/gemini.jsx';
-import { fetchTravelInstructions } from './api/travelInstructions';
 import { addQuestion } from './api/questionAnalysis';
 import LoadingScreen from './components/LoadingScreen';
+import FetchConsole from './components/FetchConsole.jsx';
 import './index.css';
 
 // Lazy load components
@@ -14,7 +14,6 @@ const ChatInput = lazy(() => import('./components/ChatInput'));
 const ThemeToggle = lazy(() => import('./components/ThemeToggle'));
 const MobileNavBar = lazy(() => import('./components/MobileNavBar'));
 const FAQPage = lazy(() => import('./pages/FAQPage'));
-const LandingPage = lazy(() => import('./pages/LandingPage.jsx'));
 const PrivacyPage = lazy(() => import('./pages/PrivacyPage'));
 
 // Prefetch components
@@ -28,8 +27,6 @@ const prefetchComponent = (importFn) => {
 function App() {
   // State management with batching
   const [state, setState] = useState({
-    isPreloading: true,
-    travelInstructions: null,
     input: '',
     theme: 'dark',
     sidebarCollapsed: false,
@@ -39,12 +36,15 @@ function App() {
     typingTimeout: null,
     isFirstInteraction: true,
     isSimplified: false,
-    model: 'models/gemini-2.0-flash-001'
+    model: 'models/gemini-2.0-flash-001',
+    showFetchConsole: false
   });
+
+  const abortControllerRef = useRef(null);
 
   const [messages, setMessages] = useState([
     {
-      text: "Welcome! I'm here to help answer your questions about the Canadian Forces Temporary Duty Travel Instructions. What would you like to know?",
+      text: "Welcome! I'm here to help answer your questions about the Canadian Forces Handbook. What would you like to know?",
       type: 'bot',
       sources: [],
       simplified: false
@@ -61,27 +61,6 @@ function App() {
       prefetchComponent(() => import('./components/MobileToggle'))
     ];
     return () => cleanupFns.forEach(cleanup => cleanup());
-  }, []);
-
-  // Preload data
-  useEffect(() => {
-    const preloadData = async () => {
-      try {
-        const data = await fetchTravelInstructions();
-        startTransition(() => {
-          setState(prev => ({
-            ...prev,
-            travelInstructions: data,
-            isPreloading: false
-          }));
-        });
-      } catch (error) {
-        console.error('Error preloading travel instructions:', error);
-        setState(prev => ({ ...prev, isPreloading: false }));
-      }
-    };
-
-    preloadData();
   }, []);
 
   // Theme and mobile updates
@@ -118,7 +97,14 @@ function App() {
   const handleSend = async () => {
     if (!state.input.trim()) return;
 
-    setState(prev => ({ ...prev, isLoading: true }));
+    // Create new AbortController
+    abortControllerRef.current = new AbortController();
+
+    setState(prev => ({
+      ...prev,
+      isLoading: true,
+      showFetchConsole: true
+    }));
     const userMessage = { text: state.input, type: 'user' };
     
     startTransition(() => {
@@ -131,10 +117,6 @@ function App() {
     });
 
     try {
-      if (!state.travelInstructions) {
-        throw new Error('Travel instructions not loaded yet. Please try again in a moment.');
-      }
-
       // Track the question for FAQ analysis and trigger update
       await addQuestion(state.input);
       window.dispatchEvent(new Event('questionAdded'));
@@ -143,7 +125,7 @@ function App() {
         state.input,
         state.isSimplified,
         state.model,
-        state.travelInstructions
+        abortControllerRef.current.signal
       );
       
       startTransition(() => {
@@ -158,24 +140,50 @@ function App() {
         ]);
       });
     } catch (error) {
-      console.error('Chat Error:', {
-        message: error.message,
-        stack: error.stack
-      });
-      
-      startTransition(() => {
-        setMessages(prev => [
-          ...prev,
-          {
-            text: `Error: ${error.message}`,
-            type: 'bot',
-            sources: []
-          }
-        ]);
-      });
+      if (error.name === 'AbortError') {
+        startTransition(() => {
+          setMessages(prev => [
+            ...prev,
+            {
+              text: 'Request cancelled by user',
+              type: 'bot',
+              sources: []
+            }
+          ]);
+        });
+      } else {
+        console.error('Chat Error:', {
+          message: error.message,
+          stack: error.stack
+        });
+        
+        startTransition(() => {
+          setMessages(prev => [
+            ...prev,
+            {
+              text: `Error: ${error.message}`,
+              type: 'bot',
+              sources: []
+            }
+          ]);
+        });
+      }
     } finally {
-      setState(prev => ({ ...prev, isLoading: false }));
+      setState(prev => ({
+        ...prev,
+        isLoading: false
+      }));
     }
+  };
+
+  const handleCancelFetch = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+  };
+
+  const handleCloseFetchConsole = () => {
+    setState(prev => ({ ...prev, showFetchConsole: false }));
   };
 
   // Typing indicator with debounce
@@ -197,6 +205,62 @@ function App() {
     setState(prev => ({ ...prev, typingTimeout: timeout }));
   };
 
+  const ChatInterface = () => (
+    <div className="flex">
+      {!state.isMobile && (
+        <Sidebar
+          theme={state.theme}
+          toggleTheme={() => setState(prev => ({
+            ...prev,
+            theme: prev.theme === 'light' ? 'dark' : 'light'
+          }))}
+          sidebarCollapsed={state.sidebarCollapsed}
+          toggleSidebar={() => setState(prev => ({
+            ...prev,
+            sidebarCollapsed: !prev.sidebarCollapsed
+          }))}
+        />
+      )}
+      <div className="flex-1">
+        <ThemeToggle
+          theme={state.theme}
+          toggleTheme={() => setState(prev => ({
+            ...prev,
+            theme: prev.theme === 'light' ? 'dark' : 'light'
+          }))}
+        />
+        <div className="main-content">
+          <div className="content-wrapper">
+            <Hero />
+            <ChatWindow
+              messages={messages}
+              isLoading={state.isLoading}
+              isTyping={state.isTyping}
+              isSimplifyMode={state.isSimplified}
+            />
+          </div>
+          <div className="chat-input-container">
+            <ChatInput
+              input={state.input}
+              setInput={(input) => setState(prev => ({ ...prev, input }))}
+              handleSend={handleSend}
+              isLoading={state.isLoading}
+              isSimplified={state.isSimplified}
+              setIsSimplified={(isSimplified) => setState(prev => ({
+                ...prev,
+                isSimplified
+              }))}
+              model={state.model}
+              setModel={(model) => setState(prev => ({ ...prev, model }))}
+              onTyping={handleTyping}
+              theme={state.theme}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <Router>
       <div className="w-screen min-h-screen overflow-x-hidden overflow-y-auto m-0 p-0 max-w-[100vw]">
@@ -204,76 +268,14 @@ function App() {
           <Routes>
             <Route path="/" element={
               <Suspense fallback={<LoadingScreen />}>
-                <LandingPage />
+                <ChatInterface />
               </Suspense>
             } />
-            <Route
-              path="/chat"
-              element={
-                state.isPreloading ? (
-                  <LoadingScreen />
-                ) : (
-                  <div className="flex">
-                    {!state.isMobile && (
-                      <Sidebar
-                        theme={state.theme}
-                        toggleTheme={() => setState(prev => ({
-                          ...prev,
-                          theme: prev.theme === 'light' ? 'dark' : 'light'
-                        }))}
-                        sidebarCollapsed={state.sidebarCollapsed}
-                        toggleSidebar={() => setState(prev => ({
-                          ...prev,
-                          sidebarCollapsed: !prev.sidebarCollapsed
-                        }))}
-                      />
-                    )}
-                    <div className="flex-1">
-                     <ThemeToggle
-                       theme={state.theme}
-                       toggleTheme={() => setState(prev => ({
-                         ...prev,
-                         theme: prev.theme === 'light' ? 'dark' : 'light'
-                       }))}
-                     />
-                     <div className="main-content">
-                       <div className="content-wrapper">
-                         <Hero />
-                         <ChatWindow
-                           messages={messages}
-                           isLoading={state.isLoading}
-                           isTyping={state.isTyping}
-                           isSimplifyMode={state.isSimplified}
-                         />
-                       </div>
-                       <div className="chat-input-container">
-                         <ChatInput
-                           input={state.input}
-                           setInput={(input) => setState(prev => ({ ...prev, input }))}
-                           handleSend={handleSend}
-                           isLoading={state.isLoading}
-                           isSimplified={state.isSimplified}
-                           setIsSimplified={(isSimplified) => setState(prev => ({
-                             ...prev,
-                             isSimplified
-                           }))}
-                           model={state.model}
-                           setModel={(model) => setState(prev => ({ ...prev, model }))}
-                           onTyping={handleTyping}
-                           theme={state.theme}
-                         />
-                       </div>
-                     </div>
-                   </div>
-                 </div>
-               )
-             }
-           />
             <Route path="/privacy" element={
-                          <Suspense fallback={<LoadingScreen />}>
-                            <PrivacyPage />
-                          </Suspense>
-                        } />
+              <Suspense fallback={<LoadingScreen />}>
+                <PrivacyPage />
+              </Suspense>
+            } />
             <Route path="/faq" element={
               <Suspense fallback={<LoadingScreen />}>
                 <FAQPage />
@@ -301,6 +303,13 @@ function App() {
           )}
         </Suspense>
       </div>
+      {state.showFetchConsole && (
+        <FetchConsole
+          isLoading={state.isLoading}
+          onCancel={handleCancelFetch}
+          onClose={handleCloseFetchConsole}
+        />
+      )}
     </Router>
   );
 }

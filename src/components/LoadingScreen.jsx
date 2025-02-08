@@ -6,7 +6,7 @@ const LoadingScreen = () => {
 
   const loadingMessages = [
     'Initializing application...',
-    'Loading travel instructions...',
+    'Loading data...',
     'Preparing chat interface...',
     'Almost ready...'
   ];
@@ -69,7 +69,7 @@ const LoadingScreen = () => {
         </div>
 
         {/* Loading text */}
-        <h2 className="loading-title">Loading Travel Instructions</h2>
+        <h2 className="loading-title">Loading Application</h2>
         <p className="loading-message">{loadingMessages[loadingPhase]}</p>
         <div className="loading-progress-bar">
           <div 
